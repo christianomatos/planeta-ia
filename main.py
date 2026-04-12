@@ -1,0 +1,1 @@
+print("Ambiente Python no WSL está funcionando!")
