@@ -1,7 +1,7 @@
 {
     "python-envs.pythonProjects": [
         {
-            "path": "src/main_v1.py",
+            "path": "src/Mapeamento_Corpo/main_v1.py",
             "envManager": "ms-python.python:venv",
             "packageManager": "ms-python.python:pip"
         }
