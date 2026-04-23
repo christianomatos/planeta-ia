@@ -1,2 +1,19 @@
 .venv/
 src/de_etl_pipeline_loja/data/raw/vendas.csv
+# Segurança
+.env
+*.env
+
+# Logs do Airflow
+**/logs/
+airflow/logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Dados locais
+**/data/bronze/
+**/data/silver/
+**/data/gold/
