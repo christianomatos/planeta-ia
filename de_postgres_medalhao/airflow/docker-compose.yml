@@ -1,0 +1,35 @@
+services:
+  webserver:
+    image: apache/airflow:2.9.3
+    container_name: airflow_web
+    user: "50000:0"
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ../:/opt/project
+    ports:
+      - "8080:8080"
+    command: webserver
+
+  scheduler:
+    image: apache/airflow:2.9.3
+    container_name: airflow_scheduler
+    user: "50000:0"
+    environment:
+      AIRFLOW_HOME: /opt/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ../:/opt/project
+    command: scheduler
+
+volumes:
+  airflow_home:
