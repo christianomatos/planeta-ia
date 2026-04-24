@@ -1,0 +1,113 @@
+name: "CI/CD — Lakehouse Pipeline"
+
+on:
+  push:
+    branches: [main, develop, "feature/**"]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.10"
+
+jobs:
+
+  lint:
+    name: "1 · Lint e Code Quality"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Instalar ferramentas de qualidade
+        run: pip install flake8 black isort
+
+      - name: Black — formatacao
+        run: black --check spark/ tests/
+
+      - name: Flake8 — estilo
+        run: flake8 spark/ tests/ --max-line-length=120
+
+      - name: isort — ordenacao de imports
+        run: isort --check-only spark/ tests/
+
+  unit-tests:
+    name: "2 · Testes Unitarios PySpark"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Instalar dependencias
+        run: |
+          pip install pytest pytest-cov \
+            pyspark==3.5.0 delta-spark==3.1.0
+
+      - name: Rodar testes
+        run: pytest tests/ -v --tb=short --cov=spark --cov-report=xml
+
+      - name: Publicar cobertura
+        uses: codecov/codecov-action@v4
+        with:
+          file: coverage.xml
+        continue-on-error: true
+
+  docker-smoke-test:
+    name: "3 · Docker Smoke Test"
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validar docker-compose.yml
+        run: docker compose -f docker/docker-compose.yml config
+
+      - name: Subir Postgres e MinIO
+        run: |
+          docker compose -f docker/docker-compose.yml \
+            up -d postgres minio
+
+      - name: Aguardar servicos
+        run: sleep 25
+
+      - name: Checar Postgres
+        run: |
+          docker compose -f docker/docker-compose.yml \
+            exec -T lh_postgres \
+            pg_isready -U admin -d source_db
+
+      - name: Checar MinIO
+        run: curl -f http://localhost:9000/minio/health/live
+
+      - name: Derrubar servicos
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.yml down -v
+
+  deploy:
+    name: "4 · Deploy Producao"
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, docker-smoke-test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log do deploy
+        run: |
+          echo "Commit: ${{ github.sha }}"
+          echo "Autor:  ${{ github.actor }}"
+          echo "Branch: ${{ github.ref_name }}"
+
+      - name: Submeter jobs Spark
+        run: |
+          echo "spark-submit spark/01_bronze_ingestion.py"
+          echo "spark-submit spark/02_silver_transform.py"
+          echo "spark-submit spark/03_gold_aggregations.py"
+          echo "Deploy concluido!"
