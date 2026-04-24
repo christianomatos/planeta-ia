@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+coverage.xml
+.env
+_checkpoints/
+_delta_log/
+data/
+.venv/
+venv/

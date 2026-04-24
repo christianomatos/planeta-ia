@@ -1,0 +1,157 @@
+version: "3.9"
+
+networks:
+  lakehouse-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  minio_data:
+  hive_data:
+
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: lh_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: source_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    networks:
+      - lakehouse-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d source_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: lh_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - lakehouse-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio-setup:
+    image: minio/mc:latest
+    container_name: lh_minio_setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - lakehouse-net
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      mc mb --ignore-existing local/bronze;
+      mc mb --ignore-existing local/silver;
+      mc mb --ignore-existing local/gold;
+      mc mb --ignore-existing local/warehouse;
+      echo 'Buckets criados: bronze, silver, gold, warehouse';
+      "
+
+  hive-metastore:
+    image: apache/hive:4.0.0
+    container_name: lh_hive
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVICE_NAME: metastore
+      DB_DRIVER: postgres
+      SERVICE_OPTS: >-
+        -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+        -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://lh_postgres:5432/hive_metastore
+        -Djavax.jdo.option.ConnectionUserName=admin
+        -Djavax.jdo.option.ConnectionPassword=admin123
+    ports:
+      - "9083:9083"
+    volumes:
+      - hive_data:/opt/hive/data
+      - ../hive/hive-site.xml:/opt/hive/conf/hive-site.xml
+    networks:
+      - lakehouse-net
+
+  spark-master:
+    image: bitnami/spark:3.5
+    container_name: lh_spark_master
+    restart: unless-stopped
+    environment:
+      SPARK_MODE: master
+      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+      SPARK_RPC_ENCRYPTION_ENABLED: "no"
+      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+      SPARK_SSL_ENABLED: "no"
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ../spark:/opt/bitnami/spark/work/spark
+    networks:
+      - lakehouse-net
+
+  spark-worker:
+    image: bitnami/spark:3.5
+    container_name: lh_spark_worker
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://lh_spark_master:7077
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_WORKER_CORES: 2
+    networks:
+      - lakehouse-net
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: lh_trino
+    restart: unless-stopped
+    depends_on:
+      - hive-metastore
+      - minio
+    ports:
+      - "8085:8080"
+    volumes:
+      - ../trino/catalog:/etc/trino/catalog
+      - ../trino/config.properties:/etc/trino/config.properties
+    networks:
+      - lakehouse-net
+
+  jupyter:
+    image: jupyter/pyspark-notebook:latest
+    container_name: lh_jupyter
+    restart: unless-stopped
+    depends_on:
+      - spark-master
+    ports:
+      - "8888:8888"
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+    volumes:
+      - ../notebooks:/home/jovyan/work
+    networks:
+      - lakehouse-net
