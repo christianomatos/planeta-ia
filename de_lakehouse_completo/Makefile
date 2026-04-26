@@ -1,71 +1,104 @@
-.PHONY: up down logs test lint format bronze silver gold pipeline trino status help
+.PHONY: up down logs test lint format bronze silver gold pipeline trino status help wait-spark
+
+
+COMPOSE=docker compose -f docker/docker-compose.yml
+SPARK_EXEC=docker exec lh_spark_master /opt/spark/bin/spark-submit
+
+
+JARS_BASE=/opt/spark/work-dir/jars/delta-spark_2.12-3.2.0.jar,/opt/spark/work-dir/jars/delta-storage-3.2.0.jar,/opt/spark/work-dir/jars/antlr4-runtime-4.9.3.jar,/opt/spark/work-dir/jars/postgresql-42.7.3.jar
+JARS_S3A=$(JARS_BASE),/opt/spark/work-dir/jars/hadoop-aws-3.3.4.jar,/opt/spark/work-dir/jars/aws-java-sdk-bundle-1.12.262.jar
+
+
+CONFS_BASE=--conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog
+CONFS_S3A=--conf spark.hadoop.fs.s3a.endpoint=http://lh_minio:9000 --conf spark.hadoop.fs.s3a.access.key=minioadmin --conf spark.hadoop.fs.s3a.secret.key=minioadmin123 --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false --conf spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider
+
 
 up:
-	docker compose -f docker/docker-compose.yml up -d
-	@echo ""
-	@echo "Servicos disponiveis:"
-	@echo "  Spark UI   -> http://localhost:8081"
-	@echo "  MinIO      -> http://localhost:9001  (minioadmin / minioadmin123)"
-	@echo "  Trino      -> http://localhost:8085"
-	@echo "  Jupyter    -> http://localhost:8888"
+	$(COMPOSE) up -d
+
 
 down:
-	docker compose -f docker/docker-compose.yml down
+	$(COMPOSE) down
+
 
 status:
-	docker compose -f docker/docker-compose.yml ps
+	$(COMPOSE) ps
+
 
 logs:
-	docker compose -f docker/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
+
+
+wait-spark:
+	until docker exec lh_spark_master true >/dev/null 2>&1; do \
+		echo "Aguardando lh_spark_master subir..."; \
+		sleep 2; \
+	done
+
 
 test:
 	pytest tests/ -v --tb=short
 
+
 lint:
 	flake8 spark/ tests/ --max-line-length=120
+
 
 format:
 	black spark/ tests/
 	isort spark/ tests/
 
-bronze:
-	docker exec lh_spark_master spark-submit \
-		--packages io.delta:delta-spark_2.12:3.1.0,org.apache.hadoop:hadoop-aws:3.3.4 \
-		/opt/bitnami/spark/work/spark/01_bronze_ingestion.py
 
-silver:
-	docker exec lh_spark_master spark-submit \
-		--packages io.delta:delta-spark_2.12:3.1.0,org.apache.hadoop:hadoop-aws:3.3.4 \
-		/opt/bitnami/spark/work/spark/02_silver_transform.py
+bronze: wait-spark
+	$(SPARK_EXEC) \
+		--master local[*] \
+		--driver-memory 1g \
+		--jars $(JARS_BASE) \
+		$(CONFS_BASE) \
+		/opt/spark/work-dir/spark/01_bronze_ingestion.py
 
-gold:
-	docker exec lh_spark_master spark-submit \
-		--packages io.delta:delta-spark_2.12:3.1.0,org.apache.hadoop:hadoop-aws:3.3.4 \
-		/opt/bitnami/spark/work/spark/03_gold_aggregations.py
+
+silver: wait-spark
+	$(SPARK_EXEC) \
+		--master local[*] \
+		--driver-memory 1g \
+		--jars $(JARS_BASE) \
+		$(CONFS_BASE) \
+		/opt/spark/work-dir/spark/02_silver_transform.py
+
+gold: wait-spark
+	$(SPARK_EXEC) \
+		--master local[*] \
+		--driver-memory 1g \
+		--jars $(JARS_BASE) \
+		$(CONFS_BASE) \
+		/opt/spark/work-dir/spark/03_gold_aggregations.py
+
 
 pipeline: bronze silver gold
-	@echo ""
 	@echo "Pipeline Bronze -> Silver -> Gold concluido!"
 
+
 trino:
-	docker exec -it lh_trino trino \
-		--server localhost:8080 \
-		--catalog delta \
-		--schema gold
+	@echo "Aguardando Trino ficar pronto..."
+	@for i in $$(seq 1 90); do \
+		if docker exec lh_trino sh -lc 'python3 - <<'"'"'PY'"'"' >/dev/null 2>&1
+import json, urllib.request, sys
+try:
+    data = urllib.request.urlopen("http://localhost:8080/v1/info", timeout=2).read()
+    info = json.loads(data.decode())
+    sys.exit(0 if info.get("starting") is False else 1)
+except Exception:
+    sys.exit(1)
+PY
+		then \
+			break; \
+		fi; \
+		echo "Trino ainda inicializando..."; \
+		sleep 2; \
+	done
+	docker exec lh_trino trino --server localhost:8080 --catalog delta --schema gold --execute "SHOW TABLES"
+
 
 help:
-	@echo ""
-	@echo "Comandos disponiveis:"
-	@echo "  make up        - Sobe todos os 8 servicos"
-	@echo "  make down      - Para todos os servicos"
-	@echo "  make status    - Lista status dos containers"
-	@echo "  make logs      - Acompanha logs em tempo real"
-	@echo "  make pipeline  - Executa Bronze -> Silver -> Gold"
-	@echo "  make bronze    - Apenas ingestao Postgres"
-	@echo "  make silver    - Apenas transformacao + ZORDER"
-	@echo "  make gold      - Apenas agregacoes + Time Travel"
-	@echo "  make trino     - Abre shell SQL no Trino"
-	@echo "  make test      - Roda testes unitarios"
-	@echo "  make lint      - Verifica qualidade do codigo"
-	@echo "  make format    - Formata codigo com Black + isort"
-	@echo ""
+	@echo "make up | down | status | logs | bronze | silver | gold | pipeline | trino | test | lint | format"
