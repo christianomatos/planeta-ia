@@ -1,6 +1,6 @@
 """
 SILVER: Limpeza, enriquecimento e MERGE incremental
-Conceitos: MERGE INTO, ZORDER BY, ACID, particionamento
+Conceitos: MERGE INTO, ACID, particionamento
 """
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
@@ -9,6 +9,7 @@ from pyspark.sql.functions import (
 )
 from delta.tables import DeltaTable
 
+
 spark = (
     SparkSession.builder
     .appName("Silver_Transform")
@@ -16,37 +17,52 @@ spark = (
             "io.delta.sql.DeltaSparkSessionExtension")
     .config("spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog")
-    .config("spark.hadoop.fs.s3a.endpoint", "http://lh_minio:9000")
-    .config("spark.hadoop.fs.s3a.access.key", "minioadmin")
-    .config("spark.hadoop.fs.s3a.secret.key", "minioadmin123")
-    .config("spark.hadoop.fs.s3a.path.style.access", "true")
-    .config("spark.hadoop.fs.s3a.impl",
-            "org.apache.hadoop.fs.s3a.S3AFileSystem")
-    .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
     .getOrCreate()
 )
 
 spark.sparkContext.setLogLevel("WARN")
 
+
+# ── Paths locais ──
+bronze_customers_path = "file:///opt/spark/work-dir/data/bronze/customers"
+bronze_orders_path = "file:///opt/spark/work-dir/data/bronze/orders"
+silver_path = "file:///opt/spark/work-dir/data/silver/orders_enriched"
+
+
 # ── Leitura da camada Bronze ──
-customers = spark.read.format("delta").load("s3a://bronze/customers")
-orders    = spark.read.format("delta").load("s3a://bronze/orders")
+customers = spark.read.format("delta").load(bronze_customers_path)
+orders = spark.read.format("delta").load(bronze_orders_path)
+
 
 # ── Limpeza de customers ──
 customers_clean = (
     customers
-    .withColumn("name",    trim(col("name")))
-    .withColumn("email",   trim(upper(col("email"))))
+    .withColumn("name", trim(col("name")))
+    .withColumn("email", trim(upper(col("email"))))
     .withColumn("country", trim(col("country")))
     .filter(col("email").isNotNull())
 )
 
-# ── Enriquecimento de orders ──
+
+# ── Enriquecimento de orders sem duplicar coluna id ──
+customers_alias = customers_clean.alias("c")
+orders_alias = orders.alias("o")
+
 orders_enriched = (
-    orders
+    orders_alias
     .join(
-        customers_clean.select("id", "name", "country"),
-        orders.customer_id == customers_clean.id
+        customers_alias.select("id", "name", "country").alias("c"),
+        col("o.customer_id") == col("c.id"),
+        "inner"
+    )
+    .select(
+        col("o.id").alias("id"),
+        col("o.customer_id"),
+        col("o.order_date"),
+        col("o.amount"),
+        col("o.status"),
+        col("c.name").alias("customer_name"),
+        col("c.country")
     )
     .withColumn(
         "order_age_days",
@@ -59,7 +75,6 @@ orders_enriched = (
     .withColumn("_silver_ts", current_timestamp())
 )
 
-silver_path = "s3a://silver/orders_enriched"
 
 # ── MERGE INTO (ACID) ──
 if DeltaTable.isDeltaTable(spark, silver_path):
@@ -68,10 +83,15 @@ if DeltaTable.isDeltaTable(spark, silver_path):
         silver_delta.alias("t")
         .merge(orders_enriched.alias("s"), "t.id = s.id")
         .whenMatchedUpdate(set={
-            "status":        "s.status",
-            "amount":        "s.amount",
+            "customer_id": "s.customer_id",
+            "order_date": "s.order_date",
+            "amount": "s.amount",
+            "status": "s.status",
+            "customer_name": "s.customer_name",
+            "country": "s.country",
+            "order_age_days": "s.order_age_days",
             "is_high_value": "s.is_high_value",
-            "_silver_ts":    "s._silver_ts"
+            "_silver_ts": "s._silver_ts"
         })
         .whenNotMatchedInsertAll()
         .execute()
@@ -87,13 +107,6 @@ else:
     )
     print("[SILVER] Carga inicial concluida.")
 
-# ── ZORDER: co-localiza dados para filtros compostos ──
-# Ideal para colunas de ALTA cardinalidade usadas juntas em WHERE
-spark.sql(f"""
-    OPTIMIZE delta.`{silver_path}`
-    ZORDER BY (customer_id, status)
-""")
-print("[SILVER] ZORDER BY aplicado em (customer_id, status).")
 
 print("[SILVER] Pipeline finalizado com sucesso!")
 spark.stop()
