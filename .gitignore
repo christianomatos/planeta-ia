@@ -17,3 +17,7 @@ __pycache__/
 **/data/bronze/
 **/data/silver/
 **/data/gold/
+de_postgres_medalhao/data/
+de_lakehouse_completo/data/
+*.parquet
+*.snappy.parquet*
