@@ -21,3 +21,10 @@ de_postgres_medalhao/data/
 de_lakehouse_completo/data/
 *.parquet
 *.snappy.parquet*
+**/jars/
+*.jar
+**/data/
+*.parquet
+*.snappy.parquet*
+__pycache__/
+.venv/
