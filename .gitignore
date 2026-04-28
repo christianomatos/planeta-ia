@@ -28,3 +28,10 @@ de_lakehouse_completo/data/
 *.snappy.parquet*
 __pycache__/
 .venv/
+**/jars/
+*.jar
+**/data/
+*.parquet
+*.snappy.parquet*
+__pycache__/
+.venv/
