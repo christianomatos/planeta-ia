@@ -1,3 +1,4 @@
+
 import pandas as pd
 
 caminho_csv = "src/de_etl_pipeline_loja/data/raw/vendas.csv"
