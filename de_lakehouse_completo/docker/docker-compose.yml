@@ -2,10 +2,12 @@ networks:
   lakehouse-net:
     driver: bridge
 
+
 volumes:
   postgres_data:
   minio_data:
   hive_data:
+
 
 services:
 
@@ -30,6 +32,7 @@ services:
       timeout: 5s
       retries: 5
 
+
   minio:
     image: minio/minio:latest
     container_name: lh_minio
@@ -51,6 +54,7 @@ services:
       timeout: 10s
       retries: 3
 
+
   minio-setup:
     image: minio/mc:latest
     container_name: lh_minio_setup
@@ -68,6 +72,7 @@ services:
       mc mb --ignore-existing local/warehouse;
       echo 'Buckets criados: bronze, silver, gold, warehouse';
       "
+
 
   hive-metastore:
     build:
@@ -92,15 +97,17 @@ services:
     volumes:
       - hive_data:/opt/hive/data
       - ../hive/hive-site.xml:/opt/hive/conf/hive-site.xml
-      - ./hive-jars/postgresql-42.7.3.jar:/opt/hive/lib/postgresql-42.7.3.jar
     networks:
-      - lakehouse-net
+      lakehouse-net:
+        aliases:
+          - lh-hive        # <-- ALIAS SEM UNDERSCORE: URI Java valida (RFC 2396)
     healthcheck:
-      test: ["CMD-SHELL", "python3 - <<'PY'\nimport socket, sys\ns=socket.socket(); s.settimeout(2)\ntry:\n    s.connect(('localhost', 9083))\n    s.close()\n    sys.exit(0)\nexcept Exception:\n    sys.exit(1)\nPY"]
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/9083' 2>/dev/null && exit 0 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
+
 
   spark-master:
     build:
@@ -130,14 +137,15 @@ services:
       timeout: 5s
       retries: 5
 
+
   trino:
-    image: trinodb/trino:476
+    image: trinodb/trino:472
     container_name: lh_trino
     hostname: lh_trino
     restart: unless-stopped
     depends_on:
       hive-metastore:
-        condition: service_started
+        condition: service_healthy   # <-- AGUARDA HIVE ESTAR PRONTO antes de subir
     ports:
       - "8085:8080"
     volumes:
@@ -146,11 +154,12 @@ services:
     networks:
       - lakehouse-net
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/v1/info')\" || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/v1/info | grep -q 'starting' || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 18
       start_period: 30s
+
 
   jupyter:
     image: jupyter/pyspark-notebook:latest

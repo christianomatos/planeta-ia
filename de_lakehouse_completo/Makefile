@@ -82,15 +82,7 @@ pipeline: bronze silver gold
 trino:
 	@echo "Aguardando Trino ficar pronto..."
 	@for i in $$(seq 1 90); do \
-		if docker exec lh_trino sh -lc 'python3 - <<'"'"'PY'"'"' >/dev/null 2>&1
-import json, urllib.request, sys
-try:
-    data = urllib.request.urlopen("http://localhost:8080/v1/info", timeout=2).read()
-    info = json.loads(data.decode())
-    sys.exit(0 if info.get("starting") is False else 1)
-except Exception:
-    sys.exit(1)
-PY
+		if docker exec lh_trino curl -sf http://localhost:8080/v1/info | grep -q '"starting":false'; \
 		then \
 			break; \
 		fi; \
